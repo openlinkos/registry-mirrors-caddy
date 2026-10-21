@@ -1,3 +1,10 @@
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://openlinkos.com/brand/linkos-mirrors/github/readme-dark.svg">
+    <img alt="LinkOS Mirrors" src="https://openlinkos.com/brand/linkos-mirrors/github/readme-light.svg" height="48">
+  </picture>
+</p>
+
 # LinkOS Registry Mirrors - Caddy
 
 LinkOS 公益运营的镜像仓库加速服务，使用 Caddy 作为反向代理，支持 Docker Hub、Google GCR、GitHub GHCR、RedHat Quay、Kubernetes Registry 镜像加速。
