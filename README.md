@@ -1,15 +1,12 @@
 <p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://openlinkos.com/brand/linkos-mirrors/github/readme-dark.svg">
-    <img alt="LinkOS Mirrors" src="https://openlinkos.com/brand/linkos-mirrors/github/readme-light.svg" height="48">
-  </picture>
+  <img alt="LinkOS Mirrors" src="https://openlinkos.com/brand/linkos-mirrors/github/readme.svg" height="56">
 </p>
 
 # LinkOS Mirrors · Caddy 零磁盘版
 
 [LinkOS Mirrors](https://github.com/openlinkos/registry-mirrors) 是由 [OpenLinkOS](https://openlinkos.com) 公益运营的免费容器镜像加速服务。本仓库是它的另一种部署方式：只用一个 Caddy，不在本地缓存镜像，几乎不占磁盘，适合在小硬盘服务器上快速搭建，或在多个地点分布部署。
 
-服务状态：[uptime.linkos.org](https://uptime.linkos.org)
+服务主页：[linkos.org](https://linkos.org/zh/mirrors) · 服务状态：[uptime.linkos.org](https://uptime.linkos.org)
 
 ## 选哪个版本
 
@@ -179,6 +176,8 @@ cp web/site.json.sample web/site.json
 - **尚未内置限流。**
 
 ## 使用须知
+
+完整的[使用须知](https://linkos.org/zh/terms)、[隐私说明](https://linkos.org/zh/privacy)和[举报与投诉](https://linkos.org/zh/abuse)见 linkos.org，要点如下：
 
 - 本服务免费、公益运营，**不保证可用性和速度**，可能随时调整、限流或停止。生产环境请自行评估，或自建一套。
 - 镜像内容来自各上游仓库，版权和责任归原作者；使用时请遵守上游的服务条款（如 Docker Hub、GitHub、Quay 的条款）。
