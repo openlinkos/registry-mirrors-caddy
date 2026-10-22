@@ -130,8 +130,6 @@ docker pull localhost:5001/library/hello-world   # Docker 默认允许以明文�
 scripts/smoke.sh                                 # 自检：五个上游各拉一个镜像并与上游比对摘要，确认镜像层经由本服务下载、只放行拉取
 ```
 
-仓库的 CI 每次提交和每天都会跑同一个自检，上游换了 CDN 地址时能及时发现。
-
 ### 不用 Docker
 
 默认配置只用到 Caddy 的标准模块，Caddy 2.11 或更新版本都能运行（本仓库在 2.11.7 上测试过）。安装方法见 [caddyserver.com/docs/install](https://caddyserver.com/docs/install)。以 Debian/Ubuntu 的官方软件包为例：
