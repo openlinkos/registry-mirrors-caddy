@@ -19,6 +19,7 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-private_ranges}
     volumes:
       - ./caddy:/etc/caddy:ro
+      - ./web:/srv/web:ro # 浏览器打开域名时的用法页
       - ./data:/data # 证书和 ACME 账号
       - ./config:/config
       - ./logs:/var/log/caddy # 访问日志，Caddy 自行轮转

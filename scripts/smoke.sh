@@ -99,5 +99,18 @@ for port in 5002 5003 5004 5005; do
   esac
 done
 
+echo "用法页与探活"
+for port in 5001 5002 5003 5004 5005; do
+  ct="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "http://$HOST:$port/")"
+  case "$ct" in
+    "200 text/html"*) ok "$port / 返回用法页" ;;
+    *) bad "$port / 返回 '$ct'，应为 200 text/html" ;;
+  esac
+  s="$(status "http://$HOST:$port/healthz")"
+  [ "$s" = 200 ] && ok "$port /healthz 返回 200" || bad "$port /healthz 返回 $s，应为 200"
+done
+s="$(status "http://$HOST:5001/robots.txt")"
+[ "$s" = 200 ] && ok "/robots.txt 返回 200" || bad "/robots.txt 返回 $s，应为 200"
+
 if [ "$fail" = 0 ]; then echo "全部通过"; else echo "有检查失败"; fi
 exit "$fail"

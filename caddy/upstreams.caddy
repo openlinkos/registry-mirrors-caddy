@@ -12,6 +12,7 @@
 #        - 跟随时不发送客户端的 Authorization 头，令牌只发给上游 registry 本身。
 #      重定向目标只能由上游给出，客户端无法指定，所以这不是开放代理。
 #   4. 发往上游的请求不带客户端 IP（X-Forwarded-*）和 Cookie。
+#   5. 浏览器打开 / 看到用法页（web/），/healthz 给监控探活；其他路径 404。
 
 # 发往上游及其 CDN 的公共设置
 (upstream_common) {
@@ -115,11 +116,15 @@
 				import upstream_common
 			}
 		}
-		handle / {
+		# 探活：这个版本没有后端缓存，Caddy 在就返回 200，给 Upptime 等监控用
+		handle /healthz {
 			respond "ok" 200
 		}
-		handle /favicon.ico {
-			root * /etc/caddy/static
+		# 浏览器打开域名时看到的用法页（仓库的 web/ 目录），只提供这几个文件
+		@web path / /index.html /favicon.svg /favicon.ico /robots.txt /site.json
+		handle @web {
+			root * {$WEB_ROOT:/srv/web}
+			header Cache-Control "no-cache"
 			file_server
 		}
 		handle {

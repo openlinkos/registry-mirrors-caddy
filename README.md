@@ -136,6 +136,7 @@ scripts/smoke.sh                                 # 自检：五个上游各拉�
 
 ```bash
 sudo cp -r caddy/* /etc/caddy/
+sudo mkdir -p /srv/web && sudo cp -r web/* /srv/web/     # 用法页，也可以用环境变量 WEB_ROOT 指到别处
 sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
 sudo systemctl edit caddy      # 写入下面两行后保存
 # [Service]
@@ -143,8 +144,19 @@ sudo systemctl edit caddy      # 写入下面两行后保存
 sudo systemctl restart caddy
 ```
 
+### 用法页
+
+用浏览器打开任一加速域名（如 `https://docker.example.com/`），会看到用法页：五个加速地址、镜像地址转换，以及 Docker、containerd、k3s、Podman 的配置写法。页面在 `web/`，纯静态，由 Caddy 直接提供，不加载任何外部资源。
+
+加速域名默认由当前地址推导：打开 `docker.example.com` 时，五个地址就是 `docker.`、`gcr.`、`ghcr.`、`k8s.`、`quay.example.com`。域名不符合这个规律，或者想在页脚放上状态页、使用须知、隐私说明等链接时，复制一份配置再修改，修改后刷新页面即可，不用重启：
+
+```bash
+cp web/site.json.sample web/site.json
+```
+
 ### 日志与监控
 
+- 探活：`GET /healthz`，Caddy 正常时返回 200，可以用于 Upptime 等监控。这个版本不缓存，没有别的后端要检查。
 - 访问日志：记录客户端 IP、请求的镜像、状态码，以及每一跳跟随的主机。
 - 指标：Prometheus 格式，地址为 `http://127.0.0.1:9180/metrics`，只在本机监听。
 - 管理接口：`localhost:2019`，只在本机监听。修改配置后执行 `docker compose restart` 即可生效。
