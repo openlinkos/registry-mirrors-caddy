@@ -1,0 +1,169 @@
+# 上游定义：每个上游一个 snippet（docker、gcr、ghcr、k8s、quay），
+# 由 mode-tls.caddy（按域名）和 mode-http.caddy（按端口）共用。
+#
+# 工作方式（零磁盘，不缓存）：
+#   1. 只放行拉取：GET、HEAD，其他方法返回 405；/v2/_catalog 返回 404；请求体最多 1 KB。
+#   2. /v2/* 转发给上游 registry。上游认证质询（Www-Authenticate）里的 realm 改写成本站同一主机，
+#      本站再把令牌请求转发给上游的认证服务，客户端全程只连本站。
+#   3. 上游把 blob（以及 registry.k8s.io 的 manifest）重定向到 CDN 或对象存储时，由 Caddy 在服务端
+#      跟随重定向，把内容流式转发给客户端，最多 3 跳：
+#        - 只跟随 https、且主机在该上游白名单内的地址；相对地址按返回它的那个主机解析；
+#        - 白名单之外的地址原样交给客户端（客户端会直连该地址，可能变慢，但不会失败）；
+#        - 跟随时不发送客户端的 Authorization 头，令牌只发给上游 registry 本身。
+#      重定向目标只能由上游给出，客户端无法指定，所以这不是开放代理。
+#   4. 发往上游的请求不带客户端 IP（X-Forwarded-*）和 Cookie。
+
+# 发往上游及其 CDN 的公共设置
+(upstream_common) {
+	transport http {
+		tls
+		dial_timeout 10s
+		response_header_timeout 60s
+	}
+	# 连接失败或上游中途断开时重试（只重试 GET、HEAD）
+	lb_retries 2
+	lb_retry_match {
+		method GET HEAD
+	}
+	header_up -X-Forwarded-For
+	header_up -X-Forwarded-Proto
+	header_up -X-Forwarded-Host
+	header_up -X-Real-IP
+	header_up -Forwarded
+	header_up -Cookie
+	header_down -Set-Cookie
+	header_down -Alt-Svc
+}
+
+# 跟随一跳重定向（在 reverse_proxy 块内使用）。参数：
+#   {args[0]} 跳数编号：1、2、3
+#   {args[1]} 返回这次重定向的主机，用于解析相对地址
+#   {args[2]} 允许跟随的目标主机（正则，不含锚点）
+#   {block}   下一跳的配置
+(follow) {
+	@redirect{args[0]} status 301 302 303 307 308
+	handle_response @redirect{args[0]} {
+		@abs{args[0]} vars_regexp abs{args[0]} {rp.header.Location} `^https://((?:{args[2]}))(/[^\s{}]*)$`
+		@rel{args[0]} vars_regexp rel{args[0]} {rp.header.Location} `^(/[^/\\\s{}][^\s{}]*)$`
+		route {
+			vars @abs{args[0]} {
+				hop{args[0]}_host {re.abs{args[0]}.1}
+				hop{args[0]}_uri {re.abs{args[0]}.2}
+			}
+			vars @rel{args[0]} {
+				hop{args[0]}_host {args[1]}
+				hop{args[0]}_uri {re.rel{args[0]}.1}
+			}
+			@follow{args[0]} not vars hop{args[0]}_host ""
+			handle @follow{args[0]} {
+				log_append redirect{args[0]} {vars.hop{args[0]}_host}
+				reverse_proxy {vars.hop{args[0]}_host}:443 {
+					rewrite {vars.hop{args[0]}_uri}
+					header_up Host {vars.hop{args[0]}_host}
+					header_up -Authorization
+					import upstream_common
+					{block}
+				}
+			}
+			# 目标不在白名单内：把重定向原样交给客户端
+			handle {
+				copy_response
+			}
+		}
+	}
+}
+
+# 一个上游的完整站点逻辑。参数：
+#   {args[0]} 上游 registry 主机
+#   {args[1]} 认证服务主机（上游 Www-Authenticate 中 realm 的主机）
+#   {args[2]} 客户端访问本站使用的协议：https；本地明文测试时为 http
+#   {args[3]} 允许跟随的重定向目标主机（正则，不含锚点）
+(registry) {
+	route {
+		request_body {
+			max_size 1KB
+		}
+		@catalog path /v2/_catalog
+		@not_pull not method GET HEAD
+		handle @catalog {
+			respond 404
+		}
+		handle @not_pull {
+			header Allow "GET, HEAD"
+			respond 405
+		}
+		handle /v2/* {
+			reverse_proxy https://{args[0]} {
+				header_up Host {args[0]}
+				header_down Www-Authenticate `realm="https://{args[1]}/` `realm="{args[2]}://{http.request.hostport}/`
+				import upstream_common
+				import follow 1 {args[0]} {args[3]} {
+					import follow 2 {vars.hop1_host} {args[3]} {
+						import follow 3 {vars.hop2_host} {args[3]} {
+							# 已跟随 3 跳：再有重定向就交给客户端，相对地址补全为绝对地址
+							header_down Location ^/ https://{vars.hop3_host}/
+						}
+					}
+				}
+			}
+		}
+		# 令牌请求：realm 路径为 /token 的上游（Docker Hub、ghcr.io、registry.k8s.io）。
+		# gcr.io（/v2/token）和 quay.io（/v2/auth）的令牌路径在 /v2/ 下，由上面转发。
+		handle /token {
+			reverse_proxy https://{args[1]} {
+				header_up Host {args[1]}
+				import upstream_common
+			}
+		}
+		handle / {
+			respond "ok" 200
+		}
+		handle /favicon.ico {
+			root * /etc/caddy/static
+			file_server
+		}
+		handle {
+			respond 404
+		}
+	}
+}
+
+# 各上游。白名单按实际观察到的重定向目标整理（2026-10），新出现的主机会先原样交给客户端，
+# 访问日志里 redirect1..3 字段记录了每一跳的主机，可据此补充。
+
+# Docker Hub：blob 重定向到 production.cloudfront.docker.com 等 *.docker.com，或 Cloudflare R2
+(docker) {
+	import registry registry-1.docker.io auth.docker.io {args[0]} `registry-1\.docker\.io|(?:[a-z0-9-]+\.)+docker\.com|docker-images-prod\.[0-9a-f]+\.r2\.cloudflarestorage\.com`
+}
+
+# gcr.io：由 Artifact Registry 提供，blob 是同主机的相对重定向（/artifacts-downloads/...）
+(gcr) {
+	import registry gcr.io gcr.io {args[0]} `gcr\.io|[a-z0-9-]+-docker\.pkg\.dev|storage\.googleapis\.com`
+}
+
+# ghcr.io：blob 重定向到 pkg-containers.githubusercontent.com
+(ghcr) {
+	import registry ghcr.io ghcr.io {args[0]} `ghcr\.io|pkg-containers\.githubusercontent\.com`
+}
+
+# registry.k8s.io：manifest 重定向到 <区域>-docker.pkg.dev；blob 重定向到 cdn.registry.k8s.io、
+# AWS 各区域的 S3 桶，或 pkg.dev（再相对重定向一次）。具体去向取决于本服务器的出口 IP。
+(k8s) {
+	import registry registry.k8s.io registry.k8s.io {args[0]} `registry\.k8s\.io|cdn\.registry\.k8s\.io|[a-z0-9-]+-docker\.pkg\.dev|[a-z0-9-]+\.s3\.dualstack\.[a-z0-9-]+\.amazonaws\.com|storage\.googleapis\.com`
+}
+
+# quay.io：blob 重定向到带签名的 cdnNN.quay.io，或（同区域的 AWS 地址）直接到 S3
+(quay) {
+	import registry quay.io quay.io {args[0]} `quay\.io|cdn[0-9]*\.quay\.io|(?:quayio-production-s3\.)?s3(?:\.dualstack)?(?:\.[a-z0-9-]+)?\.amazonaws\.com`
+}
+
+# 访问日志：JSON，按大小轮转，保留 30 天。目录默认 /var/log/caddy，可用环境变量 LOG_DIR 覆盖
+(access_log) {
+	log {
+		output file {$LOG_DIR:/var/log/caddy}/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+	}
+}

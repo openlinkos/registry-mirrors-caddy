@@ -1,0 +1,29 @@
+# LinkOS Mirrors（Caddy 零磁盘版）：一个 Caddy 按需代理五个上游，不在本地缓存镜像。
+# 使用宿主机网络（仅 Linux）：tls 模式监听 80、443，http 模式监听 5001–5005；
+# 指标只在 127.0.0.1:9180，管理接口只在 localhost:2019。配置项见 .env.sample。
+services:
+  caddy:
+    container_name: registry-mirrors-caddy
+    # 用 DNS-01 申请证书时，先按 Dockerfile 构建带插件的镜像，再在 .env 中设置 CADDY_IMAGE
+    image: ${CADDY_IMAGE:-caddy:2.11.7-alpine}
+    restart: always
+    network_mode: host
+    environment:
+      MODE: ${MODE:-tls}
+      DOMAIN: ${DOMAIN:-}
+      ACME_DNS: ${ACME_DNS:-auto}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      DNSPOD_TOKEN: ${DNSPOD_TOKEN:-}
+      PUBLIC_SCHEME: ${PUBLIC_SCHEME:-https}
+      BIND: ${BIND:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-private_ranges}
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - ./data:/data # 证书和 ACME 账号
+      - ./config:/config
+      - ./logs:/var/log/caddy # 访问日志，Caddy 自行轮转
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"

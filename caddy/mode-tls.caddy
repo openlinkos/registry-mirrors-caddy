@@ -1,0 +1,48 @@
+# 直连模式（MODE=tls，默认）：Caddy 直接对外提供五个域名，并自动申请、续期证书。
+# 默认用 HTTP-01 / TLS-ALPN-01 验证，需要 80、443 端口能从公网访问；每个域名单独一张证书，不用通配符。
+# ACME_DNS=cloudflare 或 dnspod 时改用 DNS-01，需要带 DNS 插件的镜像（见 Dockerfile）。
+
+(tls-auto) {
+}
+
+(tls-cloudflare) {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+}
+
+(tls-dnspod) {
+	tls {
+		dns dnspod {env.DNSPOD_TOKEN}
+	}
+}
+
+docker.{$DOMAIN} {
+	import tls-{$ACME_DNS:auto}
+	import access_log
+	import docker https
+}
+
+gcr.{$DOMAIN} {
+	import tls-{$ACME_DNS:auto}
+	import access_log
+	import gcr https
+}
+
+ghcr.{$DOMAIN} {
+	import tls-{$ACME_DNS:auto}
+	import access_log
+	import ghcr https
+}
+
+k8s.{$DOMAIN} {
+	import tls-{$ACME_DNS:auto}
+	import access_log
+	import k8s https
+}
+
+quay.{$DOMAIN} {
+	import tls-{$ACME_DNS:auto}
+	import access_log
+	import quay https
+}
