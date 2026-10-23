@@ -69,6 +69,7 @@ docker pull k8s.linkos.org/<镜像>:<标签>               # 对应 registry.k8s
 
 - 只放行拉取请求（GET、HEAD）。其他方法返回 405，`/v2/_catalog` 返回 404。
 - 本服务会把上游的认证质询（`Www-Authenticate`）改写为指向自己，令牌请求也由本服务转发。客户端只需要能访问加速地址。
+- containerd 拉取时会用 `ns` 参数说明镜像来自哪个上游（例如 `?ns=docker.io`）。和加速地址对应的上游不一致时返回 404，containerd 会换下一个地址，不会拿到另一个上游的同名镜像。常见于把 `quay.` 等地址误配成了 Docker Hub 的镜像。
 - 上游常把镜像层（blob）重定向到 CDN 或对象存储，例如 Docker Hub 的 `production.cloudfront.docker.com`、quay.io 的 `cdnNN.quay.io`、registry.k8s.io 的 `cdn.registry.k8s.io` 和 `*-docker.pkg.dev`。Caddy 会在服务端跟随这些重定向，最多 3 跳，再把内容直接转发给客户端，客户端不会被引向这些地址。
 - Caddy 只跟随该上游白名单内的 https 地址。白名单外的重定向会原样交给客户端，客户端会直连该地址：可能较慢，但仍能拉取。各上游的白名单见 [`caddy/upstreams.caddy`](caddy/upstreams.caddy)。访问日志的 `redirect1`–`redirect3` 字段记录了每一跳实际跟随的主机。
 
@@ -100,9 +101,13 @@ docker build -t registry-mirrors-caddy:2.11.7 .   # 编入 cloudflare、dnspod �
 
 然后在 `.env` 中设置 `CADDY_IMAGE=registry-mirrors-caddy:2.11.7`，并设置 `ACME_DNS=cloudflare` 和 `CLOUDFLARE_API_TOKEN`，或 `ACME_DNS=dnspod` 和 `DNSPOD_TOKEN`。
 
-### 方式二：放在 CDN 或反向代理之后（MODE=http）
+### 方式二：放在 CDN 或反向代理之后，按域名回源（MODE=vhost）
 
-此时 Caddy 只监听明文端口，由前面的 CDN 或反向代理负责 TLS。端口约定与 registry-mirrors 相同：
+Caddy 只监听一个明文端口 `HTTP_PORT`（默认 8080），按访问的域名区分上游，不认识的域名返回 404。由前面的 CDN 或反向代理负责 TLS。在 `.env` 中设置 `MODE=vhost`、`DOMAIN=example.com`，需要时设置 `HTTP_PORT`，然后把五个加速域名都回源到这一个端口。注意事项和方式三相同。
+
+### 方式三：放在 CDN 或反向代理之后，按端口回源（MODE=http）
+
+每个上游一个明文端口，由前面的 CDN 或反向代理负责 TLS。默认端口如下，可以用 `PORT_DOCKER`、`PORT_GCR`、`PORT_GHCR`、`PORT_K8S`、`PORT_QUAY` 修改：
 
 | 端口 | 上游 |
 | --- | --- |
@@ -114,7 +119,7 @@ docker build -t registry-mirrors-caddy:2.11.7 .   # 编入 cloudflare、dnspod �
 
 在 `.env` 中设置 `MODE=http`，然后把每个加速域名回源到对应端口。注意以下几点：
 
-- 回源时要保留客户端访问的域名（Host 头），本服务据此生成认证地址。
+- 回源时要保留客户端访问的域名（Host 头），本服务据此生成认证地址。方式二、方式三都是这样。
 - 前面要对客户端提供 HTTPS。如果只用明文访问，需设置 `PUBLIC_SCHEME=http`。
 - 想在访问日志里记录真实客户端 IP，请把 CDN 的回源地址段写进 `TRUSTED_PROXIES`。
 - 反向代理与本服务在同一台机器上时，可以设置 `BIND=127.0.0.1`，避免这些端口暴露到公网。
@@ -126,6 +131,8 @@ MODE=http PUBLIC_SCHEME=http BIND=127.0.0.1 docker compose up -d
 docker pull localhost:5001/library/hello-world   # Docker 默认允许以明文访问 localhost
 scripts/smoke.sh                                 # 自检：五个上游各拉一个镜像并与上游比对摘要，确认镜像层经由本服务下载、只放行拉取
 ```
+
+放在 CDN 之后时，也可以经公网域名自检：`SMOKE_DOMAIN=example.com scripts/smoke.sh`。
 
 ### 不用 Docker
 
@@ -164,13 +171,15 @@ cp web/site.json.sample web/site.json
 - **不是开放代理**：每个加速地址只转发到固定的上游。跟随重定向时，目标地址来自上游的响应，并且必须在白名单内，客户端无法指定。
 - **令牌不发给 CDN**：客户端的 `Authorization` 头只发给上游 registry 本身。跟随重定向访问 CDN 或对象存储时不会携带它；这些地址自带签名，不需要令牌。
 - **不透露用户 IP**：发往上游的请求不带 `X-Forwarded-For` 等头，也不带 Cookie。
+- **不透露源站地址**：Docker Hub 响应里的 `Docker-Ratelimit-Source`（本服务器的出口 IP）不转给客户端。
+- **客户端 IP 不能伪造**：只信任 `TRUSTED_PROXIES` 发来的 `X-Forwarded-For`，并从右往左取第一个不受信任的地址。客户端自己带的值在最左边，不会被当成客户端 IP。
 - **管理接口和指标只在本机监听。**
 - **2026-10 之前的版本有以下问题**：上游 CDN 地址变化后，镜像层会被重定向到未经改写的地址，从而绕过代理；`/metrics` 对公网开放；还需要额外的 `*-auth`、`*-storage` 子域名和 Cloudflare API 令牌。自建过的用户请更新到当前配置，旧的子域名解析可以删除。
 
 ## 限制
 
 - **不缓存**：每次拉取都会回源，服务器的入站、出站流量都约等于拉取量。
-- **Docker Hub 匿名拉取有频率限制**：按服务器的出口 IP 计算，所有用户共用这一个限额。用户较多时请改用 registry-mirrors。
+- **Docker Hub 匿名拉取有频率限制**：按服务器的出口 IP 计算，所有用户共用这一个限额（2026-10 实测响应头为每小时 100 次）。用户较多时请改用 registry-mirrors。
 - **上游的 CDN 地址会变**：出现白名单外的新地址时，拉取不会失败，但客户端需要直连该地址才能下载镜像层。请根据访问日志补充 `caddy/upstreams.caddy` 中的白名单。
 - **registry.k8s.io 的去向因地而异**：它按请求来源 IP 选择后端（cdn.registry.k8s.io、AWS S3 或 pkg.dev），服务器所在位置不同，跟随的地址也不同。
 - **尚未内置限流。**
