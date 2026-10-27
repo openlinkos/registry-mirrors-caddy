@@ -1,29 +1,29 @@
 # 回源模式（MODE=http）：明文 HTTP，由前面的 CDN 或反向代理负责 TLS。
-# 端口与 registry-mirrors 一致：5001 Docker Hub、5002 gcr.io、5003 ghcr.io、5004 registry.k8s.io、5005 quay.io。
-# 回源时请保留客户端访问的域名（Host 头），认证地址（realm）据此生成；
+# 默认端口 5001 Docker Hub、5002 gcr.io、5003 ghcr.io、5004 registry.k8s.io、5005 quay.io，可用 PORT_* 改。
+# 按端口区分上游，但回源时仍要保留客户端访问的域名（Host 头）：认证地址（realm）据此生成。
 # PUBLIC_SCHEME 是客户端访问时的协议，CDN 终止 TLS 时为 https（默认），本地明文测试时设为 http。
 
-http://:5001 {
+http://:{$PORT_DOCKER:5001} {
 	import access_log
 	import docker {$PUBLIC_SCHEME:https}
 }
 
-http://:5002 {
+http://:{$PORT_GCR:5002} {
 	import access_log
 	import gcr {$PUBLIC_SCHEME:https}
 }
 
-http://:5003 {
+http://:{$PORT_GHCR:5003} {
 	import access_log
 	import ghcr {$PUBLIC_SCHEME:https}
 }
 
-http://:5004 {
+http://:{$PORT_K8S:5004} {
 	import access_log
 	import k8s {$PUBLIC_SCHEME:https}
 }
 
-http://:5005 {
+http://:{$PORT_QUAY:5005} {
 	import access_log
 	import quay {$PUBLIC_SCHEME:https}
 }

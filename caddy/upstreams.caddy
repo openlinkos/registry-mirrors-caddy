@@ -11,7 +11,11 @@
 #        - 白名单之外的地址原样交给客户端（客户端会直连该地址，可能变慢，但不会失败）；
 #        - 跟随时不发送客户端的 Authorization 头，令牌只发给上游 registry 本身。
 #      重定向目标只能由上游给出，客户端无法指定，所以这不是开放代理。
-#   4. 发往上游的请求不带客户端 IP（X-Forwarded-*）和 Cookie。
+#   4. 发往上游的请求不带客户端 IP（X-Forwarded-*）和 Cookie；Docker Hub 返回的 Docker-Ratelimit-Source
+#      （本服务器的出口 IP）不转给客户端，放在 CDN 之后时不暴露源站地址。
+#   5. containerd 用 ns 参数说明要拉的是哪个上游的镜像（例如 ?ns=docker.io）。和本入口的上游不一致时返回 404，
+#      containerd 会换下一个地址，不会拿到另一个上游的同名镜像。
+#   6. 浏览器打开 / 看到用法页（web/），/healthz 给监控探活；其他路径 404。
 
 # 发往上游及其 CDN 的公共设置
 (upstream_common) {
@@ -33,6 +37,7 @@
 	header_up -Cookie
 	header_down -Set-Cookie
 	header_down -Alt-Svc
+	header_down -Docker-Ratelimit-Source
 }
 
 # 跟随一跳重定向（在 reverse_proxy 块内使用）。参数：
@@ -78,6 +83,7 @@
 #   {args[1]} 认证服务主机（上游 Www-Authenticate 中 realm 的主机）
 #   {args[2]} 客户端访问本站使用的协议：https；本地明文测试时为 http
 #   {args[3]} 允许跟随的重定向目标主机（正则，不含锚点）
+#   {args[4]} containerd 用 ns 参数指这个上游时的写法：docker.io、gcr.io、ghcr.io、registry.k8s.io、quay.io
 (registry) {
 	route {
 		request_body {
@@ -91,6 +97,14 @@
 		handle @not_pull {
 			header Allow "GET, HEAD"
 			respond 405
+		}
+		@wrong_ns {
+			query ns=*
+			not query ns={args[4]}
+		}
+		handle @wrong_ns {
+			header Content-Type application/json
+			respond `{"errors":[{"code":"NAME_UNKNOWN","message":"this entrance only serves {args[4]}"}]}` 404
 		}
 		handle /v2/* {
 			reverse_proxy https://{args[0]} {
@@ -115,11 +129,30 @@
 				import upstream_common
 			}
 		}
-		handle / {
+		# 探活：这个版本没有后端缓存，Caddy 在就返回 200，给 Upptime 等监控用
+		handle /healthz {
 			respond "ok" 200
 		}
-		handle /favicon.ico {
-			root * /etc/caddy/static
+		# 浏览器打开域名时看到的用法页（仓库的 web/ 目录），只提供这几个文件和 assets/ 下的样式、脚本、字体、标志。
+		# 页面只加载自己的文件，CSP 不允许内联脚本和样式；标志 SVG 里带着自己的 <style>，单独放宽。
+		@web path / /index.html /favicon.svg /favicon.ico /robots.txt /site.json /assets/*
+		handle @web {
+			root * {$WEB_ROOT:/srv/web}
+			header {
+				Cache-Control "no-cache"
+				X-Content-Type-Options "nosniff"
+				Referrer-Policy "no-referrer"
+			}
+			@page path / /index.html
+			header @page {
+				Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+				X-Frame-Options "DENY"
+			}
+			@svg path *.svg
+			header @svg Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+			# 有的系统（例如 Windows）没有 .woff2 的类型
+			@font path *.woff2
+			header @font Content-Type "font/woff2"
 			file_server
 		}
 		handle {
@@ -133,28 +166,28 @@
 
 # Docker Hub：blob 重定向到 production.cloudfront.docker.com 等 *.docker.com，或 Cloudflare R2
 (docker) {
-	import registry registry-1.docker.io auth.docker.io {args[0]} `registry-1\.docker\.io|(?:[a-z0-9-]+\.)+docker\.com|docker-images-prod\.[0-9a-f]+\.r2\.cloudflarestorage\.com`
+	import registry registry-1.docker.io auth.docker.io {args[0]} `registry-1\.docker\.io|(?:[a-z0-9-]+\.)+docker\.com|docker-images-prod\.[0-9a-f]+\.r2\.cloudflarestorage\.com` docker.io
 }
 
 # gcr.io：由 Artifact Registry 提供，blob 是同主机的相对重定向（/artifacts-downloads/...）
 (gcr) {
-	import registry gcr.io gcr.io {args[0]} `gcr\.io|[a-z0-9-]+-docker\.pkg\.dev|storage\.googleapis\.com`
+	import registry gcr.io gcr.io {args[0]} `gcr\.io|[a-z0-9-]+-docker\.pkg\.dev|storage\.googleapis\.com` gcr.io
 }
 
 # ghcr.io：blob 重定向到 pkg-containers.githubusercontent.com
 (ghcr) {
-	import registry ghcr.io ghcr.io {args[0]} `ghcr\.io|pkg-containers\.githubusercontent\.com`
+	import registry ghcr.io ghcr.io {args[0]} `ghcr\.io|pkg-containers\.githubusercontent\.com` ghcr.io
 }
 
 # registry.k8s.io：manifest 重定向到 <区域>-docker.pkg.dev；blob 重定向到 cdn.registry.k8s.io、
 # AWS 各区域的 S3 桶，或 pkg.dev（再相对重定向一次）。具体去向取决于本服务器的出口 IP。
 (k8s) {
-	import registry registry.k8s.io registry.k8s.io {args[0]} `registry\.k8s\.io|cdn\.registry\.k8s\.io|[a-z0-9-]+-docker\.pkg\.dev|[a-z0-9-]+\.s3\.dualstack\.[a-z0-9-]+\.amazonaws\.com|storage\.googleapis\.com`
+	import registry registry.k8s.io registry.k8s.io {args[0]} `registry\.k8s\.io|cdn\.registry\.k8s\.io|[a-z0-9-]+-docker\.pkg\.dev|[a-z0-9-]+\.s3\.dualstack\.[a-z0-9-]+\.amazonaws\.com|storage\.googleapis\.com` registry.k8s.io
 }
 
 # quay.io：blob 重定向到带签名的 cdnNN.quay.io，或（同区域的 AWS 地址）直接到 S3
 (quay) {
-	import registry quay.io quay.io {args[0]} `quay\.io|cdn[0-9]*\.quay\.io|(?:quayio-production-s3\.)?s3(?:\.dualstack)?(?:\.[a-z0-9-]+)?\.amazonaws\.com`
+	import registry quay.io quay.io {args[0]} `quay\.io|cdn[0-9]*\.quay\.io|(?:quayio-production-s3\.)?s3(?:\.dualstack)?(?:\.[a-z0-9-]+)?\.amazonaws\.com` quay.io
 }
 
 # 访问日志：JSON，按大小轮转，保留 30 天。目录默认 /var/log/caddy，可用环境变量 LOG_DIR 覆盖

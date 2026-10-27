@@ -8,3 +8,4 @@ logs/
 
 # jetbrains
 .idea
+web/site.json

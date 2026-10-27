@@ -1,6 +1,6 @@
 # LinkOS Mirrors（Caddy 零磁盘版）：一个 Caddy 按需代理五个上游，不在本地缓存镜像。
-# 使用宿主机网络（仅 Linux）：tls 模式监听 80、443，http 模式监听 5001–5005；
-# 指标只在 127.0.0.1:9180，管理接口只在 localhost:2019。配置项见 .env.sample。
+# 使用宿主机网络（仅 Linux）：tls 模式监听 80、443，vhost 模式监听 HTTP_PORT（默认 8080），
+# http 模式监听 5001–5005；指标只在 127.0.0.1:9180，管理接口只在 localhost:2019。配置项见 .env.sample。
 services:
   caddy:
     container_name: registry-mirrors-caddy
@@ -15,10 +15,17 @@ services:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
       DNSPOD_TOKEN: ${DNSPOD_TOKEN:-}
       PUBLIC_SCHEME: ${PUBLIC_SCHEME:-https}
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      PORT_DOCKER: ${PORT_DOCKER:-5001}
+      PORT_GCR: ${PORT_GCR:-5002}
+      PORT_GHCR: ${PORT_GHCR:-5003}
+      PORT_K8S: ${PORT_K8S:-5004}
+      PORT_QUAY: ${PORT_QUAY:-5005}
       BIND: ${BIND:-}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-private_ranges}
     volumes:
       - ./caddy:/etc/caddy:ro
+      - ./web:/srv/web:ro # 浏览器打开域名时的用法页
       - ./data:/data # 证书和 ACME 账号
       - ./config:/config
       - ./logs:/var/log/caddy # 访问日志，Caddy 自行轮转

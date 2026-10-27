@@ -1,15 +1,12 @@
 <p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://openlinkos.com/brand/linkos-mirrors/github/readme-dark.svg">
-    <img alt="LinkOS Mirrors" src="https://openlinkos.com/brand/linkos-mirrors/github/readme-light.svg" height="48">
-  </picture>
+  <img alt="LinkOS Mirrors" src="https://openlinkos.com/brand/linkos-mirrors/github/readme.svg" height="56">
 </p>
 
 # LinkOS Mirrors · Caddy 零磁盘版
 
 [LinkOS Mirrors](https://github.com/openlinkos/registry-mirrors) 是由 [LinkOS 团队](https://linkos.io) 运营的免费容器镜像加速服务。本仓库是它的另一种部署方式：只用一个 Caddy，不在本地缓存镜像，几乎不占磁盘，适合在小硬盘服务器上快速搭建，或在多个地点分布部署。
 
-服务状态：[uptime.linkos.org](https://uptime.linkos.org)
+服务主页：[linkos.org](https://linkos.org/zh/mirrors) · 服务状态：[uptime.linkos.org](https://uptime.linkos.org)
 
 ## 选哪个版本
 
@@ -72,6 +69,7 @@ docker pull k8s.linkos.org/<镜像>:<标签>               # 对应 registry.k8s
 
 - 只放行拉取请求（GET、HEAD）。其他方法返回 405，`/v2/_catalog` 返回 404。
 - 本服务会把上游的认证质询（`Www-Authenticate`）改写为指向自己，令牌请求也由本服务转发。客户端只需要能访问加速地址。
+- containerd 拉取时会用 `ns` 参数说明镜像来自哪个上游（例如 `?ns=docker.io`）。和加速地址对应的上游不一致时返回 404，containerd 会换下一个地址，不会拿到另一个上游的同名镜像。常见于把 `quay.` 等地址误配成了 Docker Hub 的镜像。
 - 上游常把镜像层（blob）重定向到 CDN 或对象存储，例如 Docker Hub 的 `production.cloudfront.docker.com`、quay.io 的 `cdnNN.quay.io`、registry.k8s.io 的 `cdn.registry.k8s.io` 和 `*-docker.pkg.dev`。Caddy 会在服务端跟随这些重定向，最多 3 跳，再把内容直接转发给客户端，客户端不会被引向这些地址。
 - Caddy 只跟随该上游白名单内的 https 地址。白名单外的重定向会原样交给客户端，客户端会直连该地址：可能较慢，但仍能拉取。各上游的白名单见 [`caddy/upstreams.caddy`](caddy/upstreams.caddy)。访问日志的 `redirect1`–`redirect3` 字段记录了每一跳实际跟随的主机。
 
@@ -103,9 +101,13 @@ docker build -t registry-mirrors-caddy:2.11.7 .   # 编入 cloudflare、dnspod �
 
 然后在 `.env` 中设置 `CADDY_IMAGE=registry-mirrors-caddy:2.11.7`，并设置 `ACME_DNS=cloudflare` 和 `CLOUDFLARE_API_TOKEN`，或 `ACME_DNS=dnspod` 和 `DNSPOD_TOKEN`。
 
-### 方式二：放在 CDN 或反向代理之后（MODE=http）
+### 方式二：放在 CDN 或反向代理之后，按域名回源（MODE=vhost）
 
-此时 Caddy 只监听明文端口，由前面的 CDN 或反向代理负责 TLS。端口约定与 registry-mirrors 相同：
+Caddy 只监听一个明文端口 `HTTP_PORT`（默认 8080），按访问的域名区分上游，不认识的域名返回 404。由前面的 CDN 或反向代理负责 TLS。在 `.env` 中设置 `MODE=vhost`、`DOMAIN=example.com`，需要时设置 `HTTP_PORT`，然后把五个加速域名都回源到这一个端口。注意事项和方式三相同。
+
+### 方式三：放在 CDN 或反向代理之后，按端口回源（MODE=http）
+
+每个上游一个明文端口，由前面的 CDN 或反向代理负责 TLS。默认端口如下，可以用 `PORT_DOCKER`、`PORT_GCR`、`PORT_GHCR`、`PORT_K8S`、`PORT_QUAY` 修改：
 
 | 端口 | 上游 |
 | --- | --- |
@@ -117,7 +119,7 @@ docker build -t registry-mirrors-caddy:2.11.7 .   # 编入 cloudflare、dnspod �
 
 在 `.env` 中设置 `MODE=http`，然后把每个加速域名回源到对应端口。注意以下几点：
 
-- 回源时要保留客户端访问的域名（Host 头），本服务据此生成认证地址。
+- 回源时要保留客户端访问的域名（Host 头），本服务据此生成认证地址。方式二、方式三都是这样。
 - 前面要对客户端提供 HTTPS。如果只用明文访问，需设置 `PUBLIC_SCHEME=http`。
 - 想在访问日志里记录真实客户端 IP，请把 CDN 的回源地址段写进 `TRUSTED_PROXIES`。
 - 反向代理与本服务在同一台机器上时，可以设置 `BIND=127.0.0.1`，避免这些端口暴露到公网。
@@ -130,12 +132,15 @@ docker pull localhost:5001/library/hello-world   # Docker 默认允许以明文�
 scripts/smoke.sh                                 # 自检：五个上游各拉一个镜像并与上游比对摘要，确认镜像层经由本服务下载、只放行拉取
 ```
 
+放在 CDN 之后时，也可以经公网域名自检：`SMOKE_DOMAIN=example.com scripts/smoke.sh`。
+
 ### 不用 Docker
 
 默认配置只用到 Caddy 的标准模块，Caddy 2.11 或更新版本都能运行（本仓库在 2.11.7 上测试过）。安装方法见 [caddyserver.com/docs/install](https://caddyserver.com/docs/install)。以 Debian/Ubuntu 的官方软件包为例：
 
 ```bash
 sudo cp -r caddy/* /etc/caddy/
+sudo mkdir -p /srv/web && sudo cp -r web/* /srv/web/     # 用法页，也可以用环境变量 WEB_ROOT 指到别处
 sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
 sudo systemctl edit caddy      # 写入下面两行后保存
 # [Service]
@@ -143,8 +148,29 @@ sudo systemctl edit caddy      # 写入下面两行后保存
 sudo systemctl restart caddy
 ```
 
+### 用法页
+
+用浏览器打开任一加速域名（如 `https://docker.example.com/`），会看到用法页：Docker、containerd、k3s / RKE2、Podman / CRI-O 和 Kubernetes 工具的分步配置（加速域名已经填好，可以直接复制）、镜像地址转换、五个加速地址和常见问题。中英文都在页面里，语言跟随浏览器，也可以在右上角切换；配色有自动、浅色、深色三种。
+
+页面在 `web/`，纯静态，由 Caddy 直接提供，不加载任何外部资源；CSP 只允许页面自己的文件，没有内联脚本和样式。样式、字体和标志来自 OpenLinkOS 设计系统 [`@openlinkos/ui`](https://github.com/openlinkos/design)，放在 `web/assets/`，升级时运行 `scripts/vendor-ui.sh <版本>` 再提交。
+
+加速域名默认由当前地址推导：打开 `docker.example.com` 时，五个地址就是 `docker.`、`gcr.`、`ghcr.`、`k8s.`、`quay.example.com`。域名不符合这个规律，或者想改站点名称和品牌、在页脚放上状态页和使用须知等链接时，复制一份配置再修改，修改后刷新页面即可，不用重启：
+
+```bash
+cp web/site.json.sample web/site.json
+```
+
+| 字段 | 作用 |
+| --- | --- |
+| `name` | 站点名称，默认 `LinkOS Mirrors` |
+| `brand` | 设计系统里的品牌，决定配色和标志：默认 `linkos-mirrors`，也可以是 `linkos`、`openlinkos` 等；写 `none` 用中性外观 |
+| `operator` | 运营者，页面上写「由 … 运营」 |
+| `domains` | `docker`、`gcr`、`ghcr`、`k8s`、`quay` 五个加速域名，留空的由当前地址推导 |
+| `links` | 页脚链接：`status`、`terms`、`privacy`、`abuse`、`source`、`home`。写了 `status` 时，页面上多一节「服务状态」指向它 |
+
 ### 日志与监控
 
+- 探活：`GET /healthz`，Caddy 正常时返回 200，可以用于 Upptime 等监控。这个版本不缓存，没有别的后端要检查。
 - 访问日志：记录客户端 IP、请求的镜像、状态码，以及每一跳跟随的主机。
 - 指标：Prometheus 格式，地址为 `http://127.0.0.1:9180/metrics`，只在本机监听。
 - 管理接口：`localhost:2019`，只在本机监听。修改配置后执行 `docker compose restart` 即可生效。
@@ -155,18 +181,22 @@ sudo systemctl restart caddy
 - **不是开放代理**：每个加速地址只转发到固定的上游。跟随重定向时，目标地址来自上游的响应，并且必须在白名单内，客户端无法指定。
 - **令牌不发给 CDN**：客户端的 `Authorization` 头只发给上游 registry 本身。跟随重定向访问 CDN 或对象存储时不会携带它；这些地址自带签名，不需要令牌。
 - **不透露用户 IP**：发往上游的请求不带 `X-Forwarded-For` 等头，也不带 Cookie。
+- **不透露源站地址**：Docker Hub 响应里的 `Docker-Ratelimit-Source`（本服务器的出口 IP）不转给客户端。
+- **客户端 IP 不能伪造**：只信任 `TRUSTED_PROXIES` 发来的 `X-Forwarded-For`，并从右往左取第一个不受信任的地址。客户端自己带的值在最左边，不会被当成客户端 IP。
 - **管理接口和指标只在本机监听。**
 - **2026-10 之前的版本有以下问题**：上游 CDN 地址变化后，镜像层会被重定向到未经改写的地址，从而绕过代理；`/metrics` 对公网开放；还需要额外的 `*-auth`、`*-storage` 子域名和 Cloudflare API 令牌。自建过的用户请更新到当前配置，旧的子域名解析可以删除。
 
 ## 限制
 
 - **不缓存**：每次拉取都会回源，服务器的入站、出站流量都约等于拉取量。
-- **Docker Hub 匿名拉取有频率限制**：按服务器的出口 IP 计算，所有用户共用这一个限额。用户较多时请改用 registry-mirrors。
+- **Docker Hub 匿名拉取有频率限制**：按服务器的出口 IP 计算，所有用户共用这一个限额（2026-10 实测响应头为每小时 100 次）。用户较多时请改用 registry-mirrors。
 - **上游的 CDN 地址会变**：出现白名单外的新地址时，拉取不会失败，但客户端需要直连该地址才能下载镜像层。请根据访问日志补充 `caddy/upstreams.caddy` 中的白名单。
 - **registry.k8s.io 的去向因地而异**：它按请求来源 IP 选择后端（cdn.registry.k8s.io、AWS S3 或 pkg.dev），服务器所在位置不同，跟随的地址也不同。
 - **尚未内置限流。**
 
 ## 使用须知
+
+完整的[使用须知](https://linkos.org/zh/terms)、[隐私说明](https://linkos.org/zh/privacy)和[举报与投诉](https://linkos.org/zh/abuse)见 linkos.org，要点如下：
 
 - 本服务免费提供、尽力维护，**不保证可用性和速度**，可能随时调整、限流或停止。生产环境请自行评估，或自建一套。
 - 镜像内容来自各上游仓库，版权和责任归原作者；使用时请遵守上游的服务条款（如 Docker Hub、GitHub、Quay 的条款）。
