@@ -159,6 +159,16 @@ for i in "${!BASES[@]}"; do
 done
 s="$(status "${BASES[0]}/robots.txt")"
 [ "$s" = 200 ] && ok "/robots.txt 返回 200" || bad "/robots.txt 返回 $s，应为 200"
+ct="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "${BASES[0]}/assets/ui.css")"
+case "$ct" in
+  "200 text/css"*) ok "/assets/ui.css 返回样式" ;;
+  *) bad "/assets/ui.css 返回 '$ct'，应为 200 text/css" ;;
+esac
+csp="$(curl -s -o /dev/null -D - "${BASES[0]}/" | tr -d '\r' | sed -n 's/^[Cc]ontent-[Ss]ecurity-[Pp]olicy: //p')"
+case "$csp" in
+  *"script-src 'self'"*) ok "用法页带 CSP" ;;
+  *) bad "用法页没有 CSP（'${csp:-无}'）" ;;
+esac
 
 if [ "$fail" = 0 ]; then echo "全部通过"; else echo "有检查失败"; fi
 exit "$fail"
