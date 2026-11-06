@@ -6,7 +6,7 @@
 
 [LinkOS Mirrors](https://github.com/openlinkos/registry-mirrors) 是由 [LinkOS 团队](https://linkos.io) 运营的免费容器镜像加速服务。本仓库是它的另一种部署方式：只用一个 Caddy，不在本地缓存镜像，几乎不占磁盘，适合在小硬盘服务器上快速搭建，或在多个地点分布部署。
 
-服务主页：[linkos.org](https://linkos.org/zh/mirrors) · 服务状态：[uptime.linkos.org](https://uptime.linkos.org)
+服务主页：[linkos.org](https://linkos.org/zh/mirrors) · 服务状态：[status.linkos.org](https://status.linkos.org)
 
 ## 选哪个版本
 
